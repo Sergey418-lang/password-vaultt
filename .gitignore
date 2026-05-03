@@ -1,24 +1,5 @@
-cat > .gitignore << 'EOF'
-# Файлы с паролями (НЕЛЬЗЯ заливать!)
 vault.json
 master.hash
 export.csv
-
-# Скомпилированный бинарник
-vault.exe
-vault
 *.exe
-
-# Временные файлы
-*.tmp
-*.log
-
-# Файлы Go
-go.sum
-
-# Файлы IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-EOF
+vault
