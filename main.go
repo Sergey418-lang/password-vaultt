@@ -13,25 +13,31 @@ import (
 )
 
 type Entry struct {
-	Service  string
-	Login    string
-	Password string
+	Service  string `json:"service"`
+	Login    string `json:"login"`
+	Password string `json:"password"`
 }
 
 var (
 	vault    []Entry
-	key      = getKey()
 	fileName = "vault.json"
+	useEncryption = false // false = без шифрования, true = с шифрованием
 )
+
+// ========== ШИФРОВАНИЕ (шаг 5) ==========
+var key = getKey()
 
 func getKey() string {
 	if k := os.Getenv("VAULT_KEY"); k != "" {
 		return k
 	}
-	return "default-key"
+	return "default-key-2024"
 }
 
 func crypt(s string) string {
+	if !useEncryption {
+		return s // если шифрование выключено, возвращаем как есть
+	}
 	result := make([]byte, len(s))
 	for i := range s {
 		result[i] = s[i] ^ key[i%len(key)]
@@ -39,6 +45,7 @@ func crypt(s string) string {
 	return string(result)
 }
 
+// ========== JSON СОХРАНЕНИЕ И ЗАГРУЗКА (шаг 3) ==========
 func save() {
 	data, _ := json.MarshalIndent(vault, "", "  ")
 	os.WriteFile(fileName, data, 0600)
@@ -49,42 +56,46 @@ func load() {
 	json.Unmarshal(data, &vault)
 }
 
+// ========== МАСТЕР-ПАРОЛЬ (шаг 6) ==========
 func checkMaster() bool {
 	hashFile := "master.hash"
 	savedHash, err := os.ReadFile(hashFile)
 
 	if os.IsNotExist(err) {
 		fmt.Print("Придумайте мастер-пароль: ")
-		pass := readInput()
+		pass := read("")
 		fmt.Print("Подтвердите: ")
-		if pass != readInput() || len(pass) < 4 {
+		if pass != read("") || len(pass) < 4 {
 			fmt.Println("Ошибка!")
 			return false
 		}
 		hash := sha256.Sum256([]byte(pass))
 		os.WriteFile(hashFile, []byte(hex.EncodeToString(hash[:])), 0600)
-		fmt.Println("Готово!")
+		fmt.Println("Мастер-пароль установлен!")
 		return true
 	}
 
-	fmt.Print("Мастер-пароль: ")
-	pass := readInput()
+	fmt.Print("Введите мастер-пароль: ")
+	pass := read("")
 	hash := sha256.Sum256([]byte(pass))
 	return hex.EncodeToString(hash[:]) == strings.TrimSpace(string(savedHash))
 }
 
-func readInput() string {
-	text, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+// ========== ВВОД ДАННЫХ ==========
+func read(prompt string) string {
+	if prompt != "" {
+		fmt.Print(prompt)
+	}
+	reader := bufio.NewReader(os.Stdin)
+	text, _ := reader.ReadString('\n')
 	return strings.TrimSpace(text)
 }
 
+// ========== ДОБАВЛЕНИЕ (шаг 1) ==========
 func addEntry() {
-	fmt.Print("Сервис: ")
-	service := readInput()
-	fmt.Print("Логин: ")
-	login := readInput()
-	fmt.Print("Пароль: ")
-	password := readInput()
+	service := read("Сервис: ")
+	login := read("Логин: ")
+	password := read("Пароль: ")
 
 	if service == "" || login == "" || password == "" {
 		fmt.Println("Все поля обязательны!")
@@ -94,38 +105,60 @@ func addEntry() {
 	vault = append(vault, Entry{
 		Service:  service,
 		Login:    login,
-		Password: crypt(password),
+		Password: crypt(password), // шифруется только если useEncryption = true
 	})
 	save()
 	fmt.Println("Добавлено!")
 }
 
-func listEntries() {
+// ========== ПОИСК (шаг 4) ==========
+// Эта функция НЕ ЗАВИСИТ от шифрования
+// Она ищет только по названию сервиса
+func searchEntries() {
 	if len(vault) == 0 {
-		fmt.Println("Пусто")
+		fmt.Println("Хранилище пусто")
 		return
 	}
-	for i, e := range vault {
-		fmt.Printf("[%d] %s | %s | %s\n", i, e.Service, e.Login, crypt(e.Password))
-	}
-}
 
-func searchEntries() {
-	fmt.Print("Что ищем: ")
-	term := strings.ToLower(readInput())
+	term := strings.ToLower(read("Что ищем: "))
 	found := false
 
+	fmt.Println("\n=== Результаты поиска ===")
 	for i, e := range vault {
+		// Поиск ТОЛЬКО по сервису (не по паролю)
+		// Сервис НЕ шифруется, поэтому поиск работает всегда
 		if strings.Contains(strings.ToLower(e.Service), term) {
-			fmt.Printf("[%d] %s | %s | %s\n", i, e.Service, e.Login, crypt(e.Password))
+			// При показе расшифровываем пароль
+			fmt.Printf("[%d] Сервис: %s | Логин: %s | Пароль: %s\n",
+				i, e.Service, e.Login, crypt(e.Password))
 			found = true
 		}
 	}
+
 	if !found {
 		fmt.Println("Ничего не найдено")
 	}
+	fmt.Println("=========================")
 }
 
+// ========== ПОКАЗАТЬ ВСЕ (шаг 2) ==========
+func listEntries() {
+	if len(vault) == 0 {
+		fmt.Println("Хранилище пусто")
+		return
+	}
+
+	fmt.Println("\n=== Все записи ===")
+	for i, e := range vault {
+		fmt.Printf("[%d] Сервис: %s | Логин: %s | Пароль: %s\n",
+			i, e.Service, e.Login, crypt(e.Password))
+	}
+	fmt.Println("==================")
+}
+
+// ========== УДАЛЕНИЕ (шаг 4) ==========
+// Эта функция НЕ ЗАВИСИТ от шифрования
+// Она удаляет по индексу, не трогая пароль
 func deleteEntry() {
 	if len(vault) == 0 {
 		fmt.Println("Нечего удалять")
@@ -133,23 +166,30 @@ func deleteEntry() {
 	}
 
 	listEntries()
-	fmt.Print("Номер для удаления: ")
-	var idx int
-	fmt.Scanln(&idx)
 
-	if idx < 0 || idx >= len(vault) {
-		fmt.Println("Неверный номер")
+	indexStr := read("\nВведите номер для удаления: ")
+	var index int
+	_, err := fmt.Sscan(indexStr, &index)
+
+	if err != nil || index < 0 || index >= len(vault) {
+		fmt.Println("Неверный номер!")
 		return
 	}
 
-	fmt.Printf("Удалить %s? (y/n): ", vault[idx].Service)
-	if strings.ToLower(readInput()) == "y" {
-		vault = append(vault[:idx], vault[idx+1:]...)
-		save()
-		fmt.Println("Удалено!")
+	// Показываем сервис (он не зашифрован)
+	fmt.Printf("Удалить '%s'? (да/нет): ", vault[index].Service)
+	if strings.ToLower(read("")) != "да" {
+		fmt.Println("Отменено")
+		return
 	}
+
+	// Удаление по индексу - работает одинаково с шифрованием и без
+	vault = append(vault[:index], vault[index+1:]...)
+	save()
+	fmt.Println("Удалено!")
 }
 
+// ========== ГЕНЕРАТОР ПАРОЛЕЙ (шаг 7) ==========
 func generatePassword() {
 	chars := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*"
 	length := 12
@@ -161,10 +201,16 @@ func generatePassword() {
 		password[i] = chars[int(randomByte[0])%len(chars)]
 	}
 
-	fmt.Printf("Пароль: %s\n", string(password))
+	fmt.Printf("Сгенерированный пароль: %s\n", string(password))
 }
 
+// ========== ЭКСПОРТ CSV (шаг 8) ==========
 func exportCSV() {
+	if len(vault) == 0 {
+		fmt.Println("Нечего экспортировать")
+		return
+	}
+
 	file, _ := os.Create("export.csv")
 	defer file.Close()
 
@@ -178,6 +224,7 @@ func exportCSV() {
 	fmt.Println("Экспортировано в export.csv")
 }
 
+// ========== ИМПОРТ CSV (шаг 8) ==========
 func importCSV() {
 	file, err := os.Open("export.csv")
 	if err != nil {
@@ -205,27 +252,24 @@ func importCSV() {
 	fmt.Printf("Импортировано %d записей\n", count)
 }
 
+// ========== МЕНЮ (шаг 2) ==========
 func showMenu() {
-	options := []string{
-		"1. Добавить",
-		"2. Показать все",
-		"3. Найти",
-		"4. Удалить",
-		"5. Сгенерировать пароль",
-		"6. Экспорт в CSV",
-		"7. Импорт из CSV",
-		"8. Выход",
-	}
-
-	fmt.Println("\n" + strings.Repeat("-", 30))
-	for _, opt := range options {
-		fmt.Println(opt)
-	}
-	fmt.Print("Выберите: ")
+	fmt.Println("\n=== Менеджер паролей ===")
+	fmt.Println("1. Добавить запись")
+	fmt.Println("2. Показать все")
+	fmt.Println("3. Найти по сервису")
+	fmt.Println("4. Удалить запись")
+	fmt.Println("5. Сгенерировать пароль")
+	fmt.Println("6. Экспорт в CSV")
+	fmt.Println("7. Импорт из CSV")
+	fmt.Println("8. Выход")
+	fmt.Print("\nВыберите: ")
 }
 
+// ========== main ==========
 func main() {
 	if !checkMaster() {
+		fmt.Println("Доступ запрещён!")
 		return
 	}
 
@@ -233,7 +277,7 @@ func main() {
 
 	for {
 		showMenu()
-		choice := readInput()
+		choice := read("")
 
 		switch choice {
 		case "1":
